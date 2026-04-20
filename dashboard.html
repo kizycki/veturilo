@@ -174,7 +174,8 @@
   <!-- STATS -->
   <div class="stats">
     <div class="stat"><div class="stat-val accent" id="s-stations">–</div><div class="stat-lbl">Stacje</div><div class="stat-sub">aktywne</div></div>
-    <div class="stat"><div class="stat-val" id="s-bikes">–</div><div class="stat-lbl">Rowery dostępne</div><div class="stat-sub">łącznie</div></div>
+    <div class="stat"><div class="stat-val" id="s-bikes">–</div><div class="stat-lbl">Rowery na stacjach</div><div class="stat-sub">łącznie</div></div>
+    <div class="stat"><div class="stat-val muted" id="s-free">–</div><div class="stat-lbl">Rowery poza stacjami</div><div class="stat-sub">free-floating</div></div>
     <div class="stat"><div class="stat-val warn" id="s-low">–</div><div class="stat-lbl">Stacje z ≤2 rowerami</div><div class="stat-sub">mało rowerów</div></div>
     <div class="stat"><div class="stat-val danger" id="s-empty">–</div><div class="stat-lbl">Puste stacje</div><div class="stat-sub">brak rowerów</div></div>
     <div class="stat"><div class="stat-val" id="s-snapshots">–</div><div class="stat-lbl">Pomiary</div><div class="stat-sub">w historii</div></div>
@@ -298,10 +299,13 @@ function updateMeta(last) {
 
 function renderStats(last, prev) {
   const st = last.stations;
-  document.getElementById('s-stations').textContent = st.length;
-  document.getElementById('s-bikes').textContent = st.reduce((a,s)=>a+s.bikes,0);
-  document.getElementById('s-low').textContent   = st.filter(s=>s.bikes>0&&s.bikes<=2).length;
-  document.getElementById('s-empty').textContent = st.filter(s=>s.bikes===0).length;
+  const ff = last.free_floating || [];
+  document.getElementById("s-stations").textContent = st.length;
+  document.getElementById("s-bikes").textContent = st.reduce((a,s)=>a+s.bikes,0);
+  document.getElementById("s-free").textContent  = ff.length;
+  document.getElementById("s-low").textContent   = st.filter(s=>s.bikes>0&&s.bikes<=2).length;
+  document.getElementById("s-empty").textContent = st.filter(s=>s.bikes===0).length;
+}
 }
 
 // ────────────────────────────────────────────────
