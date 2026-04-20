@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-import json, urllib.request
+"""
+Veturilo collector – Warszawa (uid=812) + Piaseczno (uid=461)
+Uruchamiany przez GitHub Actions co godzinę.
+"""
+import json, time, urllib.request, os
+
+CITY_IDS  = [812, 461]   # Warszawa, Piaseczno
+API_URL   = "https://api.nextbike.net/maps/nextbike-live.json?city=" + ",".join(str(c) for c in CITY_IDS)
+DATA_FILE     = "data.json"
+MAX_SNAPSHOTS = 8760
 
 def get_json(url):
     req = urllib.request.Request(url, headers={
@@ -8,27 +17,51 @@ def get_json(url):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
-def main():
-    # Pobierz listę wszystkich sieci Nextbike na świecie
-    print("Pobieram listę wszystkich sieci Nextbike...")
-    data = get_json("https://api.nextbike.net/maps/nextbike-live.json?list_cities=1")
-    
-    # Znajdź wszystko co ma "warsaw" lub "veturilo" lub "pl" w nazwie/domenie
+def fetch():
+    data = get_json(API_URL)
+
+    seen, stations = set(), []
     for country in data.get("countries", []):
         for city in country.get("cities", []):
-            name = city.get("name", "").lower()
-            domain = city.get("domain", "").lower()
-            website = city.get("website", "").lower()
-            uid = city.get("uid", "")
-            if any(k in name+domain+website for k in ["warsaw","veturilo","warsow","varso"]):
-                print(f"ZNALEZIONO: uid={uid} name={city.get('name')} domain={domain} website={website}")
-                print(f"  pełne dane: {json.dumps(city, ensure_ascii=False)[:400]}")
+            city_name = city.get("name", "")
+            for place in city.get("places", []):
+                uid = place.get("uid")
+                name = (place.get("name") or "").strip()
+                if not name or uid in seen:
+                    continue
+                seen.add(uid)
+                bikes = place.get("bikes", 0)
+                stations.append({
+                    "uid":   uid,
+                    "name":  name,
+                    "num":   str(place.get("number", place.get("station_number", ""))),
+                    "bikes": int(bikes) if str(bikes).isdigit() else 0,
+                    "city":  city_name,
+                    "lat":   place.get("lat"),
+                    "lng":   place.get("lng"),
+                })
 
-    print("\nWszystkie polskie miasta:")
-    for country in data.get("countries", []):
-        if "poland" in country.get("name","").lower() or country.get("country","") == "PL":
-            print(f"Kraj: {country.get('name')} ({country.get('country')})")
-            for city in country.get("cities", []):
-                print(f"  uid={city.get('uid')} name={city.get('name')} domain={city.get('domain')} lat={city.get('lat')}")
+    return sorted(stations, key=lambda x: (x["city"], x["name"]))
+
+def main():
+    history = []
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, encoding="utf-8") as f:
+            try:
+                history = json.load(f)
+            except Exception:
+                history = []
+
+    stations = fetch()
+    history.append({"ts": int(time.time() * 1000), "stations": stations})
+    history = history[-MAX_SNAPSHOTS:]
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
+
+    total = sum(s["bikes"] for s in stations)
+    waw   = sum(1 for s in stations if s["city"] == "Warszawa")
+    pia   = sum(1 for s in stations if s["city"] != "Warszawa")
+    print(f"OK – {len(stations)} stacji ({waw} Warszawa, {pia} Piaseczno), {total} rowerów łącznie.")
 
 main()
