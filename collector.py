@@ -11,59 +11,31 @@ def fetch():
     with urllib.request.urlopen(req, timeout=30) as r:
         raw = json.loads(r.read().decode())
 
-    # ── DEBUG: pokaż strukturę odpowiedzi ──────────────────────────
-    top_keys = list(raw.keys())
-    print(f"DEBUG top-level keys: {top_keys}")
+    countries = raw.get("countries", [])
+    print(f"DEBUG: liczba countries = {len(countries)}")
 
-    for top_key in top_keys:
-        val = raw[top_key]
-        if isinstance(val, list) and val:
-            print(f"DEBUG raw['{top_key}'] = list of {len(val)}, first item keys: {list(val[0].keys()) if isinstance(val[0], dict) else type(val[0])}")
-            first = val[0]
-            for k, v in first.items():
-                if isinstance(v, list) and v:
-                    print(f"  DEBUG first['{k}'] = list of {len(v)}, sample keys: {list(v[0].keys()) if isinstance(v[0], dict) else type(v[0])}")
-                    inner = v[0]
-                    for k2, v2 in inner.items():
-                        if isinstance(v2, list) and v2:
-                            print(f"    DEBUG [{k}][0]['{k2}'] = list of {len(v2)}, sample keys: {list(v2[0].keys()) if isinstance(v2[0], dict) else type(v2[0])}")
-                            if v2:
-                                print(f"    SAMPLE PLACE: {json.dumps(v2[0], ensure_ascii=False)[:400]}")
-    # ── koniec DEBUG ───────────────────────────────────────────────
+    if countries:
+        c0 = countries[0]
+        print(f"DEBUG country[0] keys: {list(c0.keys())}")
+        # wypisz wszystkie klucze i typy wartości
+        for k, v in c0.items():
+            if isinstance(v, list):
+                print(f"  kraj['{k}'] = lista {len(v)} elementów")
+                if v and isinstance(v[0], dict):
+                    print(f"    pierwszy element keys: {list(v[0].keys())}")
+                    # zejdź jeszcze poziom niżej
+                    for k2, v2 in v[0].items():
+                        if isinstance(v2, list):
+                            print(f"      ['{k2}'] = lista {len(v2)} elementów")
+                            if v2 and isinstance(v2[0], dict):
+                                print(f"        przykład: {json.dumps(v2[0], ensure_ascii=False)[:400]}")
+            else:
+                print(f"  kraj['{k}'] = {repr(v)[:80]}")
 
-    seen, stations = set(), []
-    for country in raw.get("countries", []):
-        for city in country.get("cities", []):
-            for p in city.get("places", []):
-                uid = p.get("uid")
-                if not p.get("name") or uid in seen:
-                    continue
-                seen.add(uid)
-                bikes = p.get("bikes", 0)
-                stations.append({
-                    "uid":   uid,
-                    "name":  p["name"].strip(),
-                    "num":   str(p.get("number", p.get("station_number", ""))),
-                    "bikes": int(bikes) if str(bikes).isdigit() else 0,
-                    "lat":   p.get("lat"),
-                    "lng":   p.get("lng"),
-                })
-    return sorted(stations, key=lambda x: x["name"])
+    return []  # na razie tylko debug, nie zapisujemy
 
 def main():
-    history = []
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, encoding="utf-8") as f:
-            history = json.load(f)
-
-    stations = fetch()
-    history.append({"ts": int(time.time() * 1000), "stations": stations})
-    history = history[-MAX_SNAPSHOTS:]
-
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
-
-    total = sum(s["bikes"] for s in stations)
-    print(f"OK – {len(stations)} stacji, {total} rowerów.")
+    fetch()
+    print("DEBUG zakończony – sprawdź logi powyżej")
 
 main()
