@@ -1,49 +1,34 @@
 #!/usr/bin/env python3
-import json, time, urllib.request, os
-
-DATA_FILE     = "data.json"
-MAX_SNAPSHOTS = 8760
-
-# Kilka możliwych feedów Nextbike dla Warszawy
-FEEDS = [
-    "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_wa/pl/station_information.json",
-    "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_waw/pl/station_information.json",
-    "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_ve/pl/station_information.json",
-    "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_vl/pl/station_information.json",
-]
+import json, urllib.request
 
 def get_json(url):
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; VeturiloDashboard/1.0)"
     })
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
 
-def try_feed(url):
-    try:
-        data = get_json(url)
-        stations = data["data"]["stations"]
-        if stations:
-            s = stations[0]
-            print(f"  OK: {url}")
-            print(f"     {len(stations)} stacji, przykład: {s['name']} lat={s['lat']}")
-        else:
-            print(f"  PUSTY: {url}")
-    except Exception as e:
-        print(f"  BŁĄD: {url} -> {e}")
-
 def main():
-    print("Szukam właściwego feedu dla Warszawy...")
-    for f in FEEDS:
-        try_feed(f)
+    # Pobierz listę wszystkich sieci Nextbike na świecie
+    print("Pobieram listę wszystkich sieci Nextbike...")
+    data = get_json("https://api.nextbike.net/maps/nextbike-live.json?list_cities=1")
+    
+    # Znajdź wszystko co ma "warsaw" lub "veturilo" lub "pl" w nazwie/domenie
+    for country in data.get("countries", []):
+        for city in country.get("cities", []):
+            name = city.get("name", "").lower()
+            domain = city.get("domain", "").lower()
+            website = city.get("website", "").lower()
+            uid = city.get("uid", "")
+            if any(k in name+domain+website for k in ["warsaw","veturilo","warsow","varso"]):
+                print(f"ZNALEZIONO: uid={uid} name={city.get('name')} domain={domain} website={website}")
+                print(f"  pełne dane: {json.dumps(city, ensure_ascii=False)[:400]}")
 
-    # Spróbuj też pobrać listę wszystkich feedów
-    print("\nSprawdzam główny katalog GBFS Nextbike...")
-    try:
-        data = get_json("https://gbfs.nextbike.net/maps/gbfs/v2/gbfs.json")
-        print(f"  Klucze: {list(data.keys())}")
-        print(f"  Dane: {json.dumps(data)[:500]}")
-    except Exception as e:
-        print(f"  BŁĄD: {e}")
+    print("\nWszystkie polskie miasta:")
+    for country in data.get("countries", []):
+        if "poland" in country.get("name","").lower() or country.get("country","") == "PL":
+            print(f"Kraj: {country.get('name')} ({country.get('country')})")
+            for city in country.get("cities", []):
+                print(f"  uid={city.get('uid')} name={city.get('name')} domain={city.get('domain')} lat={city.get('lat')}")
 
 main()
