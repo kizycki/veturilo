@@ -182,13 +182,28 @@
     <div class="stat"><div class="stat-val accent" id="s-span">–</div><div class="stat-lbl">Zakres danych</div><div class="stat-sub">dni / godzin</div></div>
   </div>
 
-  <!-- WYKRES HISTORII -->
+  <!-- WYKRES: rowery łącznie -->
+  <div class="panel chart-panel">
+    <div class="panel-head">
+      <span class="panel-title">Rowery dostępne łącznie – historia</span>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-total"></canvas></div>
+  </div>
+
+  <!-- WYKRES: free-floating -->
+  <div class="panel chart-panel">
+    <div class="panel-head">
+      <span class="panel-title">Rowery poza stacjami (free-floating) – historia</span>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-ff"></canvas></div>
+  </div>
+
+  <!-- WYKRES HISTORII STACJI -->
   <div class="panel chart-panel">
     <div class="panel-head">
       <span class="panel-title">Historia dostępności – wybrane stacje</span>
       <span class="meta" id="chart-meta">kliknij stację w tabeli</span>
     </div>
-    <div class="station-pills" id="pills"></div>
     <div class="chart-wrap"><canvas id="chart"></canvas></div>
     <div class="chart-hint">Kliknij wiersz w tabeli poniżej, aby dodać stację do wykresu (max 6). Kliknij ponownie aby usunąć.</div>
   </div>
@@ -277,8 +292,8 @@ function render() {
 
   renderStats(last, prev);
   renderTable(last, prev);
+  renderAggCharts();
   renderChart();
-  renderPills(last);
   updateMeta(last);
 }
 
@@ -368,19 +383,71 @@ function toggleStation(uid) {
   if (selected.has(uid)) selected.delete(uid);
   else if (selected.size < 6) selected.add(uid);
   renderTable();
-  renderPills(history[history.length - 1]);
   renderChart();
 }
 
-function renderPills(last) {
-  const container = document.getElementById('pills');
-  if (!last) { container.innerHTML = ''; return; }
-  // show top 30 stations alphabetically as quick-pick pills
-  const top = [...last.stations].sort((a,b)=>a.name.localeCompare(b.name,'pl')).slice(0, 50);
-  container.innerHTML = top.map(s => {
-    const active = selected.has(s.uid) ? 'active' : '';
-    return `<span class="pill ${active}" onclick="toggleStation(${s.uid})" title="${s.name}">${s.name}</span>`;
-  }).join('');
+
+// ────────────────────────────────────────────────
+// AGGREGATE CHARTS (total bikes + free-floating)
+// ────────────────────────────────────────────────
+let chartTotal = null, chartFF = null;
+
+function makeChartOpts(label, color) {
+  return {
+    type: 'line',
+    data: { labels: [], datasets: [{ label, data: [], borderColor: color,
+      backgroundColor: color + '18', fill: true, tension: 0.3,
+      pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#7a7d85', font: { size: 11, family: "'IBM Plex Mono', monospace" }, boxWidth: 12, boxHeight: 2 } },
+        tooltip: { backgroundColor: '#1e2026', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1,
+          titleColor: '#7a7d85', bodyColor: '#e8e9eb',
+          titleFont: { family: "'IBM Plex Mono', monospace", size: 10 },
+          bodyFont:  { family: "'IBM Plex Mono', monospace", size: 12 } }
+      },
+      scales: {
+        y: { beginAtZero: false, ticks: { color: '#555', font: { size: 11, family: "'IBM Plex Mono', monospace" } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#555', font: { size: 10, family: "'IBM Plex Mono', monospace" }, maxRotation: 45, maxTicksLimit: 16 }, grid: { color: 'rgba(255,255,255,0.03)' } }
+      }
+    }
+  };
+}
+
+function renderAggCharts() {
+  if (!history.length) return;
+
+  let snaps = history;
+  if (snaps.length > 120) {
+    const step = Math.ceil(snaps.length / 120);
+    snaps = snaps.filter((_, i) => i % step === 0 || i === snaps.length - 1);
+  }
+
+  const labels = snaps.map(s => {
+    const d = new Date(s.ts);
+    return d.toLocaleString('pl-PL', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  });
+
+  const totalData = snaps.map(s => s.stations.reduce((a, st) => a + st.bikes, 0));
+  const ffData    = snaps.map(s => (s.free_floating || []).length);
+
+  // total bikes chart
+  if (chartTotal) chartTotal.destroy();
+  const ctxT = document.getElementById('chart-total').getContext('2d');
+  const optsT = makeChartOpts('Rowery na stacjach', '#4af0b0');
+  optsT.data.labels = labels;
+  optsT.data.datasets[0].data = totalData;
+  chartTotal = new Chart(ctxT, optsT);
+
+  // free-floating chart
+  if (chartFF) chartFF.destroy();
+  const ctxF = document.getElementById('chart-ff').getContext('2d');
+  const optsF = makeChartOpts('Rowery poza stacjami', '#f0b84a');
+  optsF.data.labels = labels;
+  optsF.data.datasets[0].data = ffData;
+  chartFF = new Chart(ctxF, optsF);
 }
 
 function renderChart() {
