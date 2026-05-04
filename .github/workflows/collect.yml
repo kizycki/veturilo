@@ -22,7 +22,7 @@ jobs:
         run: |
           git config user.name  "veturilo-bot"
           git config user.email "bot@veturilo"
-          git add data.json
+          git add .
           git diff --cached --quiet || git commit -m "dane: $(date '+%Y-%m-%d %H:%M')"
           git push
  
