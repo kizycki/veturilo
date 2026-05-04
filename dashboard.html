@@ -255,6 +255,7 @@ const AUTO_RELOAD_MS = 60_000;   // sprawdzaj plik co minutę (jeśli serwer, ni
 // STATE
 // ────────────────────────────────────────────────
 let history = [];
+let stationsMeta = {};   // uid -> {name, num, city, lat, lng}
 let selected = new Set();
 let sortKey = 'bikes', sortDir = -1;
 let chart = null;
@@ -266,29 +267,43 @@ const PALETTE = ['#4af0b0','#4a9ff0','#f0b84a','#f05a4a','#b04af0','#f04ab0'];
 // ────────────────────────────────────────────────
 async function loadData() {
   try {
-    const r = await fetch(DATA_FILE + '?_=' + Date.now());
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    history = Array.isArray(data) ? data : [];
+    const [rData, rStations] = await Promise.all([
+      fetch(DATA_FILE + '?_=' + Date.now()),
+      fetch('stations.json?_=' + Date.now()),
+    ]);
+    if (!rData.ok) throw new Error('HTTP ' + rData.status);
+    history  = await rData.json();
+    const rawStations = await rStations.json();
+    // build uid -> meta map
+    stationsMeta = {};
+    rawStations.forEach(s => stationsMeta[String(s.uid)] = s);
     render();
   } catch(e) {
     document.getElementById('tbody').innerHTML =
       `<tr><td colspan="5"><div class="msg">
         Nie można wczytać pliku danych.<br>
-        <code>Uruchom collector.py, poczekaj na pierwszą synchronizację,<br>
-        a potem otwórz ten plik w tym samym folderze co data.json</code>
+        <code>${e.message}</code>
       </div></td></tr>`;
-    document.getElementById('hdr-meta').textContent = 'Brak pliku data.json';
+    document.getElementById('hdr-meta').textContent = 'Błąd ładowania danych';
   }
 }
 
 // ────────────────────────────────────────────────
 // RENDER ALL
 // ────────────────────────────────────────────────
+function expandSnapshot(snap) {
+  // convert compact {ts, s:{uid:bikes}, ff:count} to {ts, stations:[...], ff_count}
+  const stations = Object.entries(snap.s || {}).map(([uid, bikes]) => {
+    const meta = stationsMeta[uid] || {};
+    return { uid: parseInt(uid), name: meta.name || uid, num: meta.num || '', city: meta.city || '', bikes, lat: meta.lat, lng: meta.lng };
+  });
+  return { ts: snap.ts, stations, ff_count: snap.ff ?? 0 };
+}
+
 function render() {
   if (!history.length) return;
-  const last = history[history.length - 1];
-  const prev = history.length >= 2 ? history[history.length - 2] : null;
+  const last = expandSnapshot(history[history.length - 1]);
+  const prev = history.length >= 2 ? expandSnapshot(history[history.length - 2]) : null;
 
   renderStats(last, prev);
   renderTable(last, prev);
@@ -304,7 +319,7 @@ function updateMeta(last) {
   document.getElementById('tbl-ts').textContent = str;
   document.getElementById('footer-updated').textContent = 'Wygenerowano: ' + new Date().toLocaleString('pl-PL');
 
-  const first = history[0];
+  const first = expandSnapshot(history[0]);
   const spanMs = last.ts - first.ts;
   const spanH  = Math.round(spanMs / 3_600_000);
   const spanD  = Math.floor(spanH / 24);
@@ -314,10 +329,9 @@ function updateMeta(last) {
 
 function renderStats(last, prev) {
   const st = last.stations;
-  const ff = last.free_floating || [];
   document.getElementById("s-stations").textContent = st.length;
   document.getElementById("s-bikes").textContent = st.reduce((a,s)=>a+s.bikes,0);
-  document.getElementById("s-free").textContent  = ff.length;
+  document.getElementById("s-free").textContent  = last.ff_count ?? 0;
   document.getElementById("s-low").textContent   = st.filter(s=>s.bikes>0&&s.bikes<=2).length;
   document.getElementById("s-empty").textContent = st.filter(s=>s.bikes===0).length;
 }
@@ -430,8 +444,9 @@ function renderAggCharts() {
     return d.toLocaleString('pl-PL', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
   });
 
-  const totalData = snaps.map(s => s.stations.reduce((a, st) => a + st.bikes, 0));
-  const ffData    = snaps.map(s => (s.free_floating || []).length);
+  const expanded  = snaps.map(expandSnapshot);
+  const totalData = expanded.map(s => s.stations.reduce((a, st) => a + st.bikes, 0));
+  const ffData    = expanded.map(s => s.ff_count ?? 0);
 
   // total bikes chart
   if (chartTotal) chartTotal.destroy();
