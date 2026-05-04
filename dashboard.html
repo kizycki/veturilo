@@ -1,565 +1,143 @@
-<!DOCTYPE html>
-<html lang="pl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Veturilo – monitor stacji</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+#!/usr/bin/env python3
+"""
+Veturilo collector – Warszawa (uid=812) + Piaseczno (uid=461)
+Struktura plików:
+  stations.json        – metadane stacji (nazwa, num, city, lat, lng) – aktualizowane gdy zmiana
+  data.json            – historia pomiarów: ts + {uid: bikes} + ff_count
+  bikes_YYYY_MM.json   – numery rowerów per stacja, rotowany miesięcznie
+"""
+import json, time, urllib.request, os, re
+from datetime import datetime
 
-  :root {
-    --bg:        #0e0f11;
-    --surface:   #16181c;
-    --border:    rgba(255,255,255,0.07);
-    --border2:   rgba(255,255,255,0.13);
-    --text:      #e8e9eb;
-    --muted:     #7a7d85;
-    --accent:    #4af0b0;
-    --accent2:   #4a9ff0;
-    --warn:      #f0b84a;
-    --danger:    #f05a4a;
-    --font:      'IBM Plex Sans', system-ui, sans-serif;
-    --mono:      'IBM Plex Mono', monospace;
-  }
+CITY_IDS      = [812, 461]
+API_URL       = "https://api.nextbike.net/maps/nextbike-live.json?city=" + ",".join(str(c) for c in CITY_IDS)
+DATA_FILE     = "data.json"
+STATIONS_FILE = "stations.json"
+MAX_SNAPSHOTS = 8760
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+def get_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; VeturiloDashboard/1.0)"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode())
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 14px;
-    line-height: 1.6;
-    min-height: 100vh;
-  }
+def is_free_floating(name):
+    return bool(re.match(r'^(BIKE\s*)?\d+$', name.strip(), re.IGNORECASE))
 
-  /* ── layout ── */
-  .shell { max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem; }
+def fetch():
+    data = get_json(API_URL)
+    seen, stations, free_floating = set(), [], []
 
-  header {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    flex-wrap: wrap; gap: 12px;
-    border-bottom: 1px solid var(--border2);
-    padding-bottom: 1.25rem; margin-bottom: 2rem;
-  }
-  .logo { display: flex; align-items: baseline; gap: 10px; }
-  .logo-mark {
-    font-family: var(--mono); font-size: 11px; font-weight: 500;
-    letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--accent); border: 1px solid var(--accent);
-    padding: 2px 8px; border-radius: 3px;
-  }
-  h1 { font-size: 22px; font-weight: 300; letter-spacing: -0.02em; }
-  h1 span { font-weight: 500; }
+    for country in data.get("countries", []):
+        for city in country.get("cities", []):
+            city_name = city.get("name", "")
+            for place in city.get("places", []):
+                uid  = place.get("uid")
+                name = (place.get("name") or "").strip()
+                if not name or uid in seen:
+                    continue
+                seen.add(uid)
 
-  .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+                bike_numbers = [str(b.get("number") or b.get("bike_number",""))
+                                for b in place.get("bike_list", [])
+                                if b.get("number") or b.get("bike_number")]
 
-  /* ── stats strip ── */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 1px;
-           background: var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 2rem; }
-  .stat { background: var(--surface); padding: 1.1rem 1.25rem; }
-  .stat-val { font-size: 28px; font-weight: 500; font-family: var(--mono); color: var(--text); line-height: 1; }
-  .stat-lbl { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
-  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
-  .accent { color: var(--accent); }
-  .warn   { color: var(--warn); }
-  .danger { color: var(--danger); }
+                bikes = place.get("bikes", 0)
+                bikes = int(bikes) if str(bikes).isdigit() else 0
 
-  /* ── two-col layout ── */
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; }
-  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+                if is_free_floating(name):
+                    free_floating.extend(bike_numbers if bike_numbers else [name])
+                else:
+                    stations.append({
+                        "uid":       uid,
+                        "name":      name,
+                        "num":       str(place.get("number", place.get("station_number", ""))),
+                        "bikes":     bikes,
+                        "bike_list": bike_numbers,
+                        "city":      city_name,
+                        "lat":       place.get("lat"),
+                        "lng":       place.get("lng"),
+                    })
 
-  /* ── panel ── */
-  .panel {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; overflow: hidden;
-  }
-  .panel-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0.85rem 1.1rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .panel-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-  .panel-body { padding: 1.1rem; }
+    stations.sort(key=lambda x: (x["city"], x["name"]))
+    return stations, free_floating
 
-  /* ── table ── */
-  .tbl-wrap { overflow-y: auto; max-height: 420px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th {
-    position: sticky; top: 0;
-    background: var(--surface); padding: 8px 10px;
-    text-align: left; font-size: 11px; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--muted);
-    border-bottom: 1px solid var(--border2);
-    cursor: pointer; user-select: none; white-space: nowrap;
-  }
-  th:hover { color: var(--text); }
-  td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: rgba(255,255,255,0.03); }
-  tr.sel td { background: rgba(74,240,176,0.07); }
-  tr { cursor: pointer; transition: background 0.1s; }
+def update_stations_meta(stations):
+    """Zapisz/zaktualizuj stations.json gdy pojawi się nowa stacja lub zmiana nazwy."""
+    existing = {}
+    if os.path.exists(STATIONS_FILE):
+        with open(STATIONS_FILE, encoding="utf-8") as f:
+            for s in json.load(f):
+                existing[s["uid"]] = s
 
-  .badge {
-    display: inline-block; font-family: var(--mono); font-size: 11px;
-    padding: 2px 8px; border-radius: 3px; font-weight: 500;
-  }
-  .b-ok   { background: rgba(74,240,176,0.12); color: var(--accent); }
-  .b-warn { background: rgba(240,184,74,0.12);  color: var(--warn); }
-  .b-bad  { background: rgba(240,90,74,0.12);   color: var(--danger); }
-  .b-gray { background: rgba(255,255,255,0.06); color: var(--muted); }
+    changed = False
+    for s in stations:
+        uid = s["uid"]
+        meta = {"uid": uid, "name": s["name"], "num": s["num"], "city": s["city"], "lat": s["lat"], "lng": s["lng"]}
+        if uid not in existing or existing[uid] != meta:
+            existing[uid] = meta
+            changed = True
 
-  .num-col { font-family: var(--mono); font-size: 13px; color: var(--muted); }
-  .bikes-col { font-family: var(--mono); font-size: 14px; font-weight: 500; }
+    if changed:
+        with open(STATIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(existing.values()), f, ensure_ascii=False, separators=(",", ":"))
+        print(f"stations.json zaktualizowany ({len(existing)} stacji).")
 
-  /* ── search ── */
-  .search-bar {
-    display: flex; gap: 8px; align-items: center;
-    padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--border);
-  }
-  input[type="text"] {
-    flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border2);
-    border-radius: 6px; color: var(--text); font-family: var(--font); font-size: 13px;
-    padding: 6px 10px; outline: none;
-  }
-  input[type="text"]::placeholder { color: var(--muted); }
-  input[type="text"]:focus { border-color: var(--accent); }
+def save_bikes_detail(ts, stations, free_floating):
+    """Zapisz numery rowerów do miesięcznego pliku bikes_YYYY_MM.json."""
+    month_file = datetime.fromtimestamp(ts / 1000).strftime("bikes_%Y_%m.json")
+    history = []
+    if os.path.exists(month_file):
+        with open(month_file, encoding="utf-8") as f:
+            try:
+                history = json.load(f)
+            except Exception:
+                history = []
 
-  /* ── chart ── */
-  .chart-panel { margin-bottom: 1.5rem; }
-  .chart-wrap { padding: 1.1rem; position: relative; height: 280px; }
-  .chart-hint { font-size: 12px; color: var(--muted); padding: 0.75rem 1.1rem; border-top: 1px solid var(--border); }
-  .station-pills { display: flex; flex-wrap: wrap; gap: 6px; padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--border); }
-  .pill {
-    font-size: 11px; font-family: var(--mono);
-    padding: 3px 10px; border-radius: 20px;
-    border: 1px solid var(--border2); color: var(--muted);
-    cursor: pointer; transition: all 0.15s;
-    max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .pill:hover { border-color: var(--border2); color: var(--text); }
-  .pill.active { border-color: var(--accent); color: var(--accent); background: rgba(74,240,176,0.08); }
-
-  /* ── error / loading ── */
-  .msg { text-align: center; padding: 3rem 1rem; color: var(--muted); }
-  .msg code { font-family: var(--mono); font-size: 12px; color: var(--accent); display: block; margin-top: 8px; }
-
-  /* ── heatmap ── */
-  .heatmap-grid { display: grid; grid-template-columns: repeat(24,1fr); gap: 2px; padding: 1.1rem; }
-  .hmap-cell {
-    aspect-ratio: 1; border-radius: 2px;
-    background: rgba(255,255,255,0.05);
-    transition: background 0.2s;
-  }
-  .hmap-axis { display: flex; justify-content: space-between; padding: 0 1.1rem 0.75rem; }
-  .hmap-axis span { font-family: var(--mono); font-size: 10px; color: var(--muted); }
-
-  /* ── footer ── */
-  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-  footer span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-</style>
-</head>
-<body>
-<div class="shell">
-
-  <header>
-    <div class="logo">
-      <span class="logo-mark">VLO</span>
-      <h1>Veturilo <span>– monitor stacji</span></h1>
-    </div>
-    <div class="meta" id="hdr-meta">Ładowanie danych…</div>
-  </header>
-
-  <!-- STATS -->
-  <div class="stats">
-    <div class="stat"><div class="stat-val accent" id="s-stations">–</div><div class="stat-lbl">Stacje</div><div class="stat-sub">aktywne</div></div>
-    <div class="stat"><div class="stat-val" id="s-bikes">–</div><div class="stat-lbl">Rowery na stacjach</div><div class="stat-sub">łącznie</div></div>
-    <div class="stat"><div class="stat-val muted" id="s-free">–</div><div class="stat-lbl">Rowery poza stacjami</div><div class="stat-sub">free-floating</div></div>
-    <div class="stat"><div class="stat-val warn" id="s-low">–</div><div class="stat-lbl">Stacje z ≤2 rowerami</div><div class="stat-sub">mało rowerów</div></div>
-    <div class="stat"><div class="stat-val danger" id="s-empty">–</div><div class="stat-lbl">Puste stacje</div><div class="stat-sub">brak rowerów</div></div>
-    <div class="stat"><div class="stat-val" id="s-snapshots">–</div><div class="stat-lbl">Pomiary</div><div class="stat-sub">w historii</div></div>
-    <div class="stat"><div class="stat-val accent" id="s-span">–</div><div class="stat-lbl">Zakres danych</div><div class="stat-sub">dni / godzin</div></div>
-  </div>
-
-  <!-- WYKRES: rowery łącznie -->
-  <div class="panel chart-panel">
-    <div class="panel-head">
-      <span class="panel-title">Rowery dostępne łącznie – historia</span>
-    </div>
-    <div class="chart-wrap"><canvas id="chart-total"></canvas></div>
-  </div>
-
-  <!-- WYKRES: free-floating -->
-  <div class="panel chart-panel">
-    <div class="panel-head">
-      <span class="panel-title">Rowery poza stacjami (free-floating) – historia</span>
-    </div>
-    <div class="chart-wrap"><canvas id="chart-ff"></canvas></div>
-  </div>
-
-  <!-- WYKRES HISTORII STACJI -->
-  <div class="panel chart-panel">
-    <div class="panel-head">
-      <span class="panel-title">Historia dostępności – wybrane stacje</span>
-      <span class="meta" id="chart-meta">kliknij stację w tabeli</span>
-    </div>
-    <div class="chart-wrap"><canvas id="chart"></canvas></div>
-    <div class="chart-hint">Kliknij wiersz w tabeli poniżej, aby dodać stację do wykresu (max 6). Kliknij ponownie aby usunąć.</div>
-  </div>
-
-  <!-- TABELA + HEATMAPA -->
-  <div class="cols">
-
-    <!-- lewa: tabela stacji -->
-    <div class="panel" style="grid-column:1/-1">
-      <div class="panel-head">
-        <span class="panel-title">Stacje – aktualny stan</span>
-        <span class="meta" id="tbl-ts"></span>
-      </div>
-      <div class="search-bar">
-        <input type="text" id="search" placeholder="Szukaj stacji…" oninput="renderTable()">
-      </div>
-      <div class="tbl-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th onclick="setSort('num')">Nr</th>
-              <th onclick="setSort('name')">Nazwa stacji</th>
-              <th onclick="setSort('bikes')">Rowery ↕</th>
-              <th onclick="setSort('delta')">Zmiana (1h)</th>
-              <th>Stan</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-  </div>
-
-  <footer>
-    <span>Źródło: maps.nextbike.net – Veturilo Warsaw (city 210,372,475)</span>
-    <span id="footer-updated"></span>
-  </footer>
-</div>
-
-<script>
-// ────────────────────────────────────────────────
-// CONFIG
-// ────────────────────────────────────────────────
-const DATA_FILE = 'data.json';   // plik w tym samym folderze co dashboard.html
-const AUTO_RELOAD_MS = 60_000;   // sprawdzaj plik co minutę (jeśli serwer, nie file://)
-
-// ────────────────────────────────────────────────
-// STATE
-// ────────────────────────────────────────────────
-let history = [];
-let stationsMeta = {};   // uid -> {name, num, city, lat, lng}
-let selected = new Set();
-let sortKey = 'bikes', sortDir = -1;
-let chart = null;
-
-const PALETTE = ['#4af0b0','#4a9ff0','#f0b84a','#f05a4a','#b04af0','#f04ab0'];
-
-// ────────────────────────────────────────────────
-// LOAD
-// ────────────────────────────────────────────────
-async function loadData() {
-  try {
-    const [rData, rStations] = await Promise.all([
-      fetch(DATA_FILE + '?_=' + Date.now()),
-      fetch('stations.json?_=' + Date.now()),
-    ]);
-    if (!rData.ok) throw new Error('HTTP ' + rData.status);
-    history  = await rData.json();
-    const rawStations = await rStations.json();
-    // build uid -> meta map
-    stationsMeta = {};
-    rawStations.forEach(s => stationsMeta[String(s.uid)] = s);
-    render();
-  } catch(e) {
-    document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="5"><div class="msg">
-        Nie można wczytać pliku danych.<br>
-        <code>${e.message}</code>
-      </div></td></tr>`;
-    document.getElementById('hdr-meta').textContent = 'Błąd ładowania danych';
-  }
-}
-
-// ────────────────────────────────────────────────
-// RENDER ALL
-// ────────────────────────────────────────────────
-function expandSnapshot(snap) {
-  // convert compact {ts, s:{uid:bikes}, ff:count} to {ts, stations:[...], ff_count}
-  const stations = Object.entries(snap.s || {}).map(([uid, bikes]) => {
-    const meta = stationsMeta[uid] || {};
-    return { uid: parseInt(uid), name: meta.name || uid, num: meta.num || '', city: meta.city || '', bikes, lat: meta.lat, lng: meta.lng };
-  });
-  return { ts: snap.ts, stations, ff_count: snap.ff ?? 0 };
-}
-
-function render() {
-  if (!history.length) return;
-  const last = expandSnapshot(history[history.length - 1]);
-  const prev = history.length >= 2 ? expandSnapshot(history[history.length - 2]) : null;
-
-  renderStats(last, prev);
-  renderTable(last, prev);
-  renderAggCharts();
-  renderChart();
-  updateMeta(last);
-}
-
-function updateMeta(last) {
-  const dt = new Date(last.ts);
-  const str = dt.toLocaleString('pl-PL');
-  document.getElementById('hdr-meta').textContent = 'Ostatni pomiar: ' + str;
-  document.getElementById('tbl-ts').textContent = str;
-  document.getElementById('footer-updated').textContent = 'Wygenerowano: ' + new Date().toLocaleString('pl-PL');
-
-  const first = expandSnapshot(history[0]);
-  const spanMs = last.ts - first.ts;
-  const spanH  = Math.round(spanMs / 3_600_000);
-  const spanD  = Math.floor(spanH / 24);
-  document.getElementById('s-snapshots').textContent = history.length;
-  document.getElementById('s-span').textContent = spanD > 0 ? `${spanD}d ${spanH % 24}h` : `${spanH}h`;
-}
-
-function renderStats(last, prev) {
-  const st = last.stations;
-  document.getElementById("s-stations").textContent = st.length;
-  document.getElementById("s-bikes").textContent = st.reduce((a,s)=>a+s.bikes,0);
-  document.getElementById("s-free").textContent  = last.ff_count ?? 0;
-  document.getElementById("s-low").textContent   = st.filter(s=>s.bikes>0&&s.bikes<=2).length;
-  document.getElementById("s-empty").textContent = st.filter(s=>s.bikes===0).length;
-}
-
-// ────────────────────────────────────────────────
-// TABLE
-// ────────────────────────────────────────────────
-let tableData = [];
-
-function setSort(key) {
-  if (sortKey === key) sortDir *= -1;
-  else { sortKey = key; sortDir = key === 'bikes' ? -1 : 1; }
-  renderTable();
-}
-
-function renderTable(last, prev) {
-  if (last) {
-    // build delta map
-    const prevMap = {};
-    if (prev) prev.stations.forEach(s => prevMap[s.uid] = s.bikes);
-
-    tableData = last.stations.map(s => ({
-      ...s,
-      delta: prevMap[s.uid] !== undefined ? s.bikes - prevMap[s.uid] : null
-    }));
-  }
-
-  const q = document.getElementById('search').value.toLowerCase();
-  let rows = tableData.filter(s => s.name.toLowerCase().includes(q));
-  rows.sort((a,b) => {
-    if (sortKey === 'name') return sortDir * a.name.localeCompare(b.name, 'pl');
-    if (sortKey === 'num')  return sortDir * (parseInt(a.num)||0) - (parseInt(b.num)||0);
-    if (sortKey === 'delta') {
-      const da = a.delta ?? -999, db = b.delta ?? -999;
-      return sortDir * (da - db);
+    snapshot = {
+        "ts": ts,
+        "s":  {str(s["uid"]): s["bike_list"] for s in stations if s["bike_list"]},
+        "ff": free_floating,
     }
-    return sortDir * (a.bikes - b.bikes);
-  });
+    history.append(snapshot)
 
-  const tbody = document.getElementById('tbody');
-  tbody.innerHTML = rows.map(s => {
-    const cls = s.bikes === 0 ? 'b-bad' : s.bikes <= 2 ? 'b-warn' : 'b-ok';
-    const lbl = s.bikes === 0 ? 'pusta' : s.bikes <= 2 ? 'mało' : 'ok';
-    const deltaStr = s.delta === null ? '–' :
-                     s.delta > 0 ? `<span style="color:var(--accent)">+${s.delta}</span>` :
-                     s.delta < 0 ? `<span style="color:var(--danger)">${s.delta}</span>` :
-                     `<span style="color:var(--muted)">0</span>`;
-    const selCls = selected.has(s.uid) ? 'sel' : '';
-    return `<tr class="${selCls}" onclick="toggleStation(${s.uid})">
-      <td class="num-col">${s.num || s.uid}</td>
-      <td>${s.name}</td>
-      <td class="bikes-col">${s.bikes}</td>
-      <td class="num-col">${deltaStr}</td>
-      <td><span class="badge ${cls}">${lbl}</span></td>
-    </tr>`;
-  }).join('');
-}
+    with open(month_file, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
 
-// ────────────────────────────────────────────────
-// STATION SELECT / CHART
-// ────────────────────────────────────────────────
-function toggleStation(uid) {
-  if (selected.has(uid)) selected.delete(uid);
-  else if (selected.size < 6) selected.add(uid);
-  renderTable();
-  renderChart();
-}
+def main():
+    # wczytaj historię
+    history = []
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, encoding="utf-8") as f:
+            try:
+                history = json.load(f)
+            except Exception:
+                history = []
 
+    stations, free_floating = fetch()
 
-// ────────────────────────────────────────────────
-// AGGREGATE CHARTS (total bikes + free-floating)
-// ────────────────────────────────────────────────
-let chartTotal = null, chartFF = null;
+    ts = int(time.time() * 1000)
 
-function makeChartOpts(label, color) {
-  return {
-    type: 'line',
-    data: { labels: [], datasets: [{ label, data: [], borderColor: color,
-      backgroundColor: color + '18', fill: true, tension: 0.3,
-      pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { color: '#7a7d85', font: { size: 11, family: "'IBM Plex Mono', monospace" }, boxWidth: 12, boxHeight: 2 } },
-        tooltip: { backgroundColor: '#1e2026', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1,
-          titleColor: '#7a7d85', bodyColor: '#e8e9eb',
-          titleFont: { family: "'IBM Plex Mono', monospace", size: 10 },
-          bodyFont:  { family: "'IBM Plex Mono', monospace", size: 12 } }
-      },
-      scales: {
-        y: { beginAtZero: false, ticks: { color: '#555', font: { size: 11, family: "'IBM Plex Mono', monospace" } }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        x: { ticks: { color: '#555', font: { size: 10, family: "'IBM Plex Mono', monospace" }, maxRotation: 45, maxTicksLimit: 16 }, grid: { color: 'rgba(255,255,255,0.03)' } }
-      }
+    # aktualizuj metadane stacji
+    update_stations_meta(stations)
+
+    # zapisz szczegółowe dane rowerów
+    save_bikes_detail(ts, stations, free_floating)
+
+    # lekki snapshot do dashboardu: tylko ts + {uid: bikes} + ff_count
+    snapshot = {
+        "ts": ts,
+        "s":  {str(s["uid"]): s["bikes"] for s in stations},
+        "ff": len(free_floating),
     }
-  };
-}
+    history.append(snapshot)
+    history = history[-MAX_SNAPSHOTS:]
 
-function renderAggCharts() {
-  if (!history.length) return;
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, separators=(",", ":"))
 
-  let snaps = history;
-  if (snaps.length > 120) {
-    const step = Math.ceil(snaps.length / 120);
-    snaps = snaps.filter((_, i) => i % step === 0 || i === snaps.length - 1);
-  }
+    total = sum(s["bikes"] for s in stations)
+    waw   = sum(1 for s in stations if s["city"] == "Warszawa")
+    pia   = sum(1 for s in stations if s["city"] != "Warszawa")
+    print(f"OK – {len(stations)} stacji ({waw} Warszawa, {pia} Piaseczno), {total} rowerów, {len(free_floating)} poza stacjami.")
 
-  const labels = snaps.map(s => {
-    const d = new Date(s.ts);
-    return d.toLocaleString('pl-PL', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
-  });
-
-  const expanded  = snaps.map(expandSnapshot);
-  const totalData = expanded.map(s => s.stations.reduce((a, st) => a + st.bikes, 0));
-  const ffData    = expanded.map(s => s.ff_count ?? 0);
-
-  // total bikes chart
-  if (chartTotal) chartTotal.destroy();
-  const ctxT = document.getElementById('chart-total').getContext('2d');
-  const optsT = makeChartOpts('Rowery na stacjach', '#4af0b0');
-  optsT.data.labels = labels;
-  optsT.data.datasets[0].data = totalData;
-  chartTotal = new Chart(ctxT, optsT);
-
-  // free-floating chart
-  if (chartFF) chartFF.destroy();
-  const ctxF = document.getElementById('chart-ff').getContext('2d');
-  const optsF = makeChartOpts('Rowery poza stacjami', '#f0b84a');
-  optsF.data.labels = labels;
-  optsF.data.datasets[0].data = ffData;
-  chartFF = new Chart(ctxF, optsF);
-}
-
-function renderChart() {
-  const ctx = document.getElementById('chart').getContext('2d');
-  if (chart) { chart.destroy(); chart = null; }
-
-  if (!history.length || selected.size === 0) {
-    document.getElementById('chart-meta').textContent = 'kliknij stację w tabeli';
-    return;
-  }
-
-  // downsample to max 120 points if history is very long
-  let snaps = history;
-  if (snaps.length > 120) {
-    const step = Math.ceil(snaps.length / 120);
-    snaps = snaps.filter((_, i) => i % step === 0 || i === snaps.length - 1);
-  }
-
-  const labels = snaps.map(s => {
-    const d = new Date(s.ts);
-    return d.toLocaleString('pl-PL', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
-  });
-
-  const datasets = [];
-  let ci = 0;
-  for (const uid of selected) {
-    const last = history[history.length - 1];
-    const name = last.stations.find(s => s.uid === uid)?.name || String(uid);
-    const data = snaps.map(snap => {
-      const s = snap.stations.find(x => x.uid === uid);
-      return s !== undefined ? s.bikes : null;
-    });
-    datasets.push({
-      label: name,
-      data,
-      borderColor: PALETTE[ci % PALETTE.length],
-      backgroundColor: 'transparent',
-      tension: 0.25,
-      pointRadius: snaps.length > 48 ? 0 : 3,
-      pointHoverRadius: 5,
-      borderWidth: 2,
-      spanGaps: true,
-    });
-    ci++;
-  }
-
-  document.getElementById('chart-meta').textContent = selected.size + ' stacja/stacji wybrana';
-
-  chart = new Chart(ctx, {
-    type: 'line',
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          labels: {
-            color: '#7a7d85', font: { size: 11, family: "'IBM Plex Mono', monospace" },
-            boxWidth: 12, boxHeight: 2,
-          }
-        },
-        tooltip: {
-          backgroundColor: '#1e2026', borderColor: 'rgba(255,255,255,0.1)',
-          borderWidth: 1, titleColor: '#7a7d85', bodyColor: '#e8e9eb',
-          titleFont: { family: "'IBM Plex Mono', monospace", size: 10 },
-          bodyFont:  { family: "'IBM Plex Mono', monospace", size: 12 },
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true, min: 0,
-          ticks: { color: '#555', font: { size: 11, family: "'IBM Plex Mono', monospace" }, stepSize: 1 },
-          grid: { color: 'rgba(255,255,255,0.05)' },
-        },
-        x: {
-          ticks: {
-            color: '#555',
-            font: { size: 10, family: "'IBM Plex Mono', monospace" },
-            maxRotation: 45, maxTicksLimit: 16,
-          },
-          grid: { color: 'rgba(255,255,255,0.03)' },
-        }
-      }
-    }
-  });
-}
-
-// ────────────────────────────────────────────────
-// INIT + AUTO RELOAD
-// ────────────────────────────────────────────────
-loadData();
-
-// Co minutę sprawdź czy plik data.json się zmienił (działa tylko przez serwer http, nie file://)
-if (location.protocol !== 'file:') {
-  setInterval(loadData, AUTO_RELOAD_MS);
-}
-</script>
-</body>
-</html>
+main()
