@@ -156,8 +156,9 @@ const DATA_FILE     = 'data.json';
 const STATIONS_FILE = 'stations.json';
 const AUTO_RELOAD   = 60_000;
 
-let map, markers = [], stationsMeta = {}, lastSnap = null;
+let map, markers = [], ffMarkers = [], stationsMeta = {}, lastSnap = null;
 let currentFilter = 'all';
+let showFF = true;
 
 // ── init map ──────────────────────────────────────────
 map = L.map('map', { zoomControl: true }).setView([52.23, 21.01], 12);
@@ -201,6 +202,7 @@ async function loadData() {
     const snap = history[history.length - 1];
     lastSnap = snap;
     renderMap(snap);
+    renderFF(snap);
     renderStats(snap);
 
     const dt = new Date(snap.ts).toLocaleString('pl-PL');
@@ -241,6 +243,37 @@ function renderMap(snap) {
   });
 }
 
+// ── render free-floating ─────────────────────────────
+function renderFF(snap) {
+  ffMarkers.forEach(m => map.removeLayer(m));
+  ffMarkers = [];
+
+  const ffLoc = snap.ff_loc || [];
+  ffLoc.forEach(f => {
+    if (!f.lat || !f.lng) return;
+    const marker = L.marker([f.lat, f.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="
+          width:9px;height:9px;border-radius:50%;
+          background:#4a9ff0;
+          border:2px solid rgba(0,0,0,0.4);
+          box-shadow:0 0 6px #4a9ff088;
+        "></div>`,
+        iconSize: [9, 9],
+        iconAnchor: [4.5, 4.5],
+      })
+    });
+    marker.bindPopup(`
+      <div class="popup-name">Rower poza stacją</div>
+      <div class="popup-num">Nr ${f.num}</div>
+      <div class="popup-label" style="color:#4a9ff0">free-floating</div>
+    `, { maxWidth: 180 });
+    marker.addTo(map);
+    ffMarkers.push(marker);
+  });
+}
+
 // ── render stats ──────────────────────────────────────
 function renderStats(snap) {
   const entries = Object.entries(snap.s || {});
@@ -261,6 +294,19 @@ function setFilter(f) {
   document.querySelectorAll('.btn-f').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
   if (lastSnap) renderMap(lastSnap);
+}
+
+// ── free-floating toggle ─────────────────────────────
+function toggleFF() {
+  showFF = !showFF;
+  const btn = document.getElementById('btn-ff');
+  if (showFF) {
+    btn.style.background = 'rgba(74,159,240,0.08)';
+    ffMarkers.forEach(m => map.addLayer(m));
+  } else {
+    btn.style.background = 'transparent';
+    ffMarkers.forEach(m => map.removeLayer(m));
+  }
 }
 
 // ── init ──────────────────────────────────────────────
