@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Veturilo – mapa stacji</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  :root {
+    --bg:      #0e0f11;
+    --surface: #16181c;
+    --border:  rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.13);
+    --text:    #e8e9eb;
+    --muted:   #7a7d85;
+    --accent:  #4af0b0;
+    --warn:    #f0b84a;
+    --danger:  #f05a4a;
+    --font:    'IBM Plex Sans', system-ui, sans-serif;
+    --mono:    'IBM Plex Mono', monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 14px;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border2);
+    flex-shrink: 0;
+  }
+
+  .logo { display: flex; align-items: baseline; gap: 10px; }
+  .logo-mark {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent);
+    padding: 2px 8px; border-radius: 3px;
+  }
+  h1 { font-size: 17px; font-weight: 300; }
+  h1 span { font-weight: 500; }
+
+  .header-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+  .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* filter buttons */
+  .filters { display: flex; gap: 6px; }
+  .btn-f {
+    font-size: 11px; font-family: var(--mono);
+    padding: 3px 12px; border-radius: 20px;
+    border: 1px solid var(--border2); color: var(--muted);
+    background: transparent; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-f:hover { color: var(--text); }
+  .btn-f.active { border-color: var(--accent); color: var(--accent); background: rgba(74,240,176,0.08); }
+  .btn-f.warn   { border-color: var(--warn);   color: var(--warn);   background: rgba(240,184,74,0.08); }
+  .btn-f.danger { border-color: var(--danger);  color: var(--danger); background: rgba(240,90,74,0.08); }
+
+  /* back link */
+  .back { font-family: var(--mono); font-size: 11px; color: var(--muted); text-decoration: none; }
+  .back:hover { color: var(--accent); }
+
+  /* stats strip */
+  .stats-strip {
+    display: flex; gap: 1px; background: var(--border);
+    border-bottom: 1px solid var(--border2); flex-shrink: 0;
+  }
+  .stat {
+    background: var(--surface); padding: 8px 16px;
+    flex: 1; min-width: 80px;
+  }
+  .stat-val { font-family: var(--mono); font-size: 18px; font-weight: 500; }
+  .stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 1px; }
+  .c-accent { color: var(--accent); }
+  .c-warn   { color: var(--warn); }
+  .c-danger { color: var(--danger); }
+
+  /* map */
+  #map { flex: 1; }
+
+  /* leaflet dark overrides */
+  .leaflet-container { background: #1a1c20; }
+  .leaflet-tile { filter: brightness(0.6) saturate(0.4); }
+
+  /* custom popup */
+  .leaflet-popup-content-wrapper {
+    background: #1e2026; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    color: var(--text); font-family: var(--font);
+  }
+  .leaflet-popup-tip { background: #1e2026; }
+  .leaflet-popup-content { margin: 12px 16px; font-size: 13px; }
+  .popup-name { font-weight: 500; font-size: 14px; margin-bottom: 6px; }
+  .popup-num  { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .popup-bikes { font-family: var(--mono); font-size: 22px; font-weight: 500; }
+  .popup-label { font-size: 11px; color: var(--muted); }
+
+  /* legend */
+  .legend {
+    position: absolute; bottom: 2rem; right: 1rem; z-index: 1000;
+    background: #1e2026; border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px; padding: 10px 14px;
+    font-size: 12px; color: var(--text);
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .legend-row:last-child { margin-bottom: 0; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-mark">VLO</span>
+    <h1>Veturilo <span>– mapa stacji</span></h1>
+  </div>
+  <div class="header-right">
+    <div class="filters">
+      <button class="btn-f active" onclick="setFilter('all')">Wszystkie</button>
+      <button class="btn-f warn"   onclick="setFilter('low')">Mało (≤2)</button>
+      <button class="btn-f danger" onclick="setFilter('empty')">Puste</button>
+    </div>
+    <span class="meta" id="hdr-meta">Ładowanie…</span>
+    <a class="back" href="dashboard.html">← dashboard</a>
+  </div>
+</header>
+
+<div class="stats-strip">
+  <div class="stat"><div class="stat-val c-accent" id="s-total">–</div><div class="stat-lbl">Stacji</div></div>
+  <div class="stat"><div class="stat-val" id="s-bikes">–</div><div class="stat-lbl">Rowerów</div></div>
+  <div class="stat"><div class="stat-val c-warn" id="s-low">–</div><div class="stat-lbl">Mało (≤2)</div></div>
+  <div class="stat"><div class="stat-val c-danger" id="s-empty">–</div><div class="stat-lbl">Puste</div></div>
+  <div class="stat"><div class="stat-val" id="s-ff">–</div><div class="stat-lbl">Poza stacjami</div></div>
+</div>
+
+<div id="map"></div>
+
+<div class="legend">
+  <div class="legend-row"><div class="legend-dot" style="background:#4af0b0"></div> Dostępne (≥3)</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#f0b84a"></div> Mało (1–2)</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#f05a4a"></div> Pusta (0)</div>
+</div>
+
+<script>
+const DATA_FILE     = 'data.json';
+const STATIONS_FILE = 'stations.json';
+const AUTO_RELOAD   = 60_000;
+
+let map, markers = [], stationsMeta = {}, lastSnap = null;
+let currentFilter = 'all';
+
+// ── init map ──────────────────────────────────────────
+map = L.map('map', { zoomControl: true }).setView([52.23, 21.01], 12);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+// ── marker icon ───────────────────────────────────────
+function makeIcon(bikes) {
+  const color = bikes === 0 ? '#f05a4a' : bikes <= 2 ? '#f0b84a' : '#4af0b0';
+  const size  = bikes === 0 ? 10 : bikes <= 2 ? 13 : Math.min(10 + bikes * 0.4, 22);
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:${size}px;height:${size}px;border-radius:50%;
+      background:${color};
+      border:2px solid rgba(0,0,0,0.4);
+      box-shadow:0 0 6px ${color}88;
+    "></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size/2, size/2],
+  });
+}
+
+// ── load data ─────────────────────────────────────────
+async function loadData() {
+  try {
+    const [rData, rStations] = await Promise.all([
+      fetch(DATA_FILE + '?_=' + Date.now()),
+      fetch(STATIONS_FILE + '?_=' + Date.now()),
+    ]);
+    const history    = await rData.json();
+    const rawStations = await rStations.json();
+
+    stationsMeta = {};
+    rawStations.forEach(s => stationsMeta[String(s.uid)] = s);
+
+    if (!history.length) return;
+    const snap = history[history.length - 1];
+    lastSnap = snap;
+    renderMap(snap);
+    renderStats(snap);
+
+    const dt = new Date(snap.ts).toLocaleString('pl-PL');
+    document.getElementById('hdr-meta').textContent = 'Ostatni pomiar: ' + dt;
+  } catch(e) {
+    document.getElementById('hdr-meta').textContent = 'Błąd: ' + e.message;
+  }
+}
+
+// ── render map ────────────────────────────────────────
+function renderMap(snap) {
+  // clear old markers
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  Object.entries(snap.s || {}).forEach(([uid, bikes]) => {
+    const meta = stationsMeta[uid];
+    if (!meta || !meta.lat || !meta.lng) return;
+
+    // apply filter
+    if (currentFilter === 'empty' && bikes !== 0) return;
+    if (currentFilter === 'low'   && (bikes === 0 || bikes > 2)) return;
+
+    const marker = L.marker([meta.lat, meta.lng], { icon: makeIcon(bikes) });
+
+    const bikeColor = bikes === 0 ? '#f05a4a' : bikes <= 2 ? '#f0b84a' : '#4af0b0';
+    const bikeLabel = bikes === 0 ? 'pusta' : bikes <= 2 ? 'mało' : 'dostępne';
+
+    marker.bindPopup(`
+      <div class="popup-name">${meta.name}</div>
+      <div class="popup-num">Nr ${meta.num} · ${meta.city}</div>
+      <div class="popup-bikes" style="color:${bikeColor}">${bikes}</div>
+      <div class="popup-label">rowery – ${bikeLabel}</div>
+    `, { maxWidth: 220 });
+
+    marker.addTo(map);
+    markers.push(marker);
+  });
+}
+
+// ── render stats ──────────────────────────────────────
+function renderStats(snap) {
+  const entries = Object.entries(snap.s || {});
+  const total   = entries.length;
+  const bikes   = entries.reduce((a, [,v]) => a + v, 0);
+  const low     = entries.filter(([,v]) => v > 0 && v <= 2).length;
+  const empty   = entries.filter(([,v]) => v === 0).length;
+  document.getElementById('s-total').textContent = total;
+  document.getElementById('s-bikes').textContent = bikes;
+  document.getElementById('s-low').textContent   = low;
+  document.getElementById('s-empty').textContent = empty;
+  document.getElementById('s-ff').textContent    = snap.ff ?? 0;
+}
+
+// ── filter ────────────────────────────────────────────
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.btn-f').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  if (lastSnap) renderMap(lastSnap);
+}
+
+// ── init ──────────────────────────────────────────────
+loadData();
+if (location.protocol !== 'file:') {
+  setInterval(loadData, AUTO_RELOAD);
+}
+</script>
+</body>
+</html>
