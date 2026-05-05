@@ -45,7 +45,12 @@ def fetch():
                 bikes = int(bikes) if str(bikes).isdigit() else 0
 
                 if is_free_floating(name):
-                    free_floating.extend(bike_numbers if bike_numbers else [name])
+                    ff_entry = {
+                        "num": bike_numbers[0] if bike_numbers else name,
+                        "lat": place.get("lat"),
+                        "lng": place.get("lng"),
+                    }
+                    free_floating.append(ff_entry)
                 else:
                     stations.append({
                         "uid":       uid,
@@ -96,7 +101,7 @@ def save_bikes_detail(ts, stations, free_floating):
     snapshot = {
         "ts": ts,
         "s":  {str(s["uid"]): s["bike_list"] for s in stations if s["bike_list"]},
-        "ff": free_floating,
+        "ff": [f["num"] for f in free_floating],
     }
     history.append(snapshot)
 
@@ -128,6 +133,7 @@ def main():
         "ts": ts,
         "s":  {str(s["uid"]): s["bikes"] for s in stations},
         "ff": len(free_floating),
+        "ff_loc": [{"num": f["num"], "lat": f["lat"], "lng": f["lng"]} for f in free_floating if f["lat"]],
     }
     history.append(snapshot)
     history = history[-MAX_SNAPSHOTS:]
@@ -138,6 +144,6 @@ def main():
     total = sum(s["bikes"] for s in stations)
     waw   = sum(1 for s in stations if s["city"] == "Warszawa")
     pia   = sum(1 for s in stations if s["city"] != "Warszawa")
-    print(f"OK – {len(stations)} stacji ({waw} Warszawa, {pia} Piaseczno), {total} rowerów, {len(free_floating)} poza stacjami.")
+    print(f"OK – {len(stations)} stacji ({waw} Warszawa, {pia} Piaseczno), {total} rowerów, {len(free_floating)} poza stacjami (z GPS: {sum(1 for f in free_floating if f['lat'])}).")
 
 main()
