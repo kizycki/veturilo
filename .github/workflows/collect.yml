@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
  
       - name: Uruchom kolektor
-        run: python3 collector_debug.py
+        run: python3 collector.py
  
       - name: Zapisz dane do repozytorium
         run: |
