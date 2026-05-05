@@ -1,127 +1,100 @@
 # Veturilo – monitor stacji rowerowych
 
-## Co jest w tym folderze
-
-| Plik | Co robi |
-|------|---------|
-| `collector.py` | Działa 24/7, co godzinę pobiera dane i zapisuje do `data.json` |
-| `dashboard.html` | Strona do przeglądania w przeglądarce. Czyta `data.json` |
-| `data.json` | Tworzy się automatycznie po pierwszym uruchomieniu collectora |
+Monitor dostępności rowerów Veturilo w Warszawie i Piasecznie. Dane zbierane co godzinę automatycznie przez GitHub Actions, prezentowane na dashboardzie i mapie dostępnych przez GitHub Pages.
 
 ---
 
-## Szybki start (na swoim komputerze)
+## Pliki w repozytorium
 
-### 1. Uruchom kolektor
-
-Potrzebujesz **Pythona 3** (sprawdź: `python --version` lub `python3 --version`)
-
-```bash
-python collector.py
-```
-
-lub
-
-```bash
-python3 collector.py
-```
-
-Kolektor:
-- od razu pobierze pierwsze dane
-- następnie będzie pobierał co godzinę
-- wypisuje logi w terminalu
-
-**Zostaw terminal otwarty** (albo uruchom w tle – patrz niżej).
-
-### 2. Otwórz dashboard
-
-Otwórz `dashboard.html` w przeglądarce. Gotowe.
+| Plik | Opis |
+|------|------|
+| `collector.py` | Skrypt pobierający dane z API Nextbike |
+| `dashboard.html` | Dashboard z wykresami historii dostępności |
+| `map.html` | Mapa stacji z aktualnym stanem |
+| `stations.json` | Metadane stacji (nazwa, nr, współrzędne) – generowany automatycznie |
+| `data.json` | Historia pomiarów w formacie kompaktowym – generowany automatycznie |
+| `bikes_YYYY_MM.json` | Numery rowerów per stacja, rotowany miesięcznie – do analizy przepływu |
+| `.github/workflows/collect.yml` | Definicja workflow GitHub Actions |
 
 ---
 
-## Uruchomienie 24/7
+## Architektura
 
-### Windows – uruchomienie w tle (Task Scheduler)
+```
+cron-job.org (co godzinę)
+    └─► GitHub Actions (collect.yml)
+            └─► collector.py
+                    ├─► stations.json   (metadane stacji, ~50 KB, stały)
+                    ├─► data.json       (historia: ts + {uid:bikes} + ff_count, ~3 KB/pomiar)
+                    └─► bikes_YYYY_MM.json  (numery rowerów, rotowany miesięcznie)
 
-1. Wyszukaj „Harmonogram zadań" w menu Start
-2. Utwórz zadanie: `python C:\sciezka\do\collector.py`
-3. Wyzwalacz: „Przy uruchomieniu komputera"
-
-### macOS / Linux – uruchomienie w tle
-
-```bash
-nohup python3 collector.py > collector.log 2>&1 &
+GitHub Pages
+    ├─► dashboard.html  (wykresy historii)
+    └─► map.html        (mapa z aktualnym stanem)
 ```
 
-Żeby sprawdzić czy działa:
-```bash
-tail -f collector.log
-```
-
-### Raspberry Pi / serwer Linux – systemd (polecane)
-
-Utwórz plik `/etc/systemd/system/veturilo.service`:
-
-```ini
-[Unit]
-Description=Veturilo collector
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /home/pi/veturilo/collector.py
-WorkingDirectory=/home/pi/veturilo
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Następnie:
-```bash
-sudo systemctl enable veturilo
-sudo systemctl start veturilo
-sudo systemctl status veturilo   # sprawdź czy działa
-```
+**Rozmiar danych po roku:** ~29 MB (`data.json`) + ~34 MB/miesiąc (`bikes_YYYY_MM.json`)
 
 ---
 
-## Udostępnienie innym osobom
+## Dashboard
 
-### Opcja A: wyślij plik (najprostsze)
+Dostępny pod adresem: `https://TWOJA-NAZWA.github.io/veturilo/dashboard.html`
 
-Po zebraniu danych (np. po kilku godzinach) skopiuj `data.json` i `dashboard.html` do jednego folderu i prześlij komuś np. przez e-mail lub Dropbox. Osoba otwiera `dashboard.html` bezpośrednio – dane są wbudowane.
+Funkcje:
+- Statystyki bieżące (liczba stacji, rowerów, pustych stacji, rowerów poza stacjami)
+- Wykres łącznej liczby rowerów na stacjach w czasie
+- Wykres liczby rowerów poza stacjami (free-floating) w czasie
+- Wykres historii wybranych stacji (kliknij stację w tabeli, max 6)
+- Filtr zakresu czasu: 24h / 7 dni / 30 dni / Wszystko
+- Tabela stacji z aktualnym stanem i zmianą względem poprzedniego pomiaru
 
-### Opcja B: prosty serwer HTTP (dostęp przez sieć lokalną)
+## Mapa
 
-```bash
-cd /sciezka/do/folderu
-python3 -m http.server 8080
-```
+Dostępna pod adresem: `https://TWOJA-NAZWA.github.io/veturilo/map.html`
 
-Inni w tej samej sieci WiFi wchodzą pod:
-```
-http://TWÓJ-IP:8080/dashboard.html
-```
-
-Twoje IP znajdziesz przez `ipconfig` (Windows) lub `ip addr` (Linux/Mac).
-
-### Opcja C: GitHub Pages (bezpłatnie, dostęp z internetu)
-
-1. Utwórz repozytorium na GitHub
-2. Wrzuć `dashboard.html` i `data.json`
-3. Włącz GitHub Pages w ustawieniach repo
-4. Ustaw `collector.py` żeby commitował `data.json` co godzinę (przez `git push`)
+Funkcje:
+- Kolorowe kropki na każdej stacji (zielona ≥3 rowery, żółta 1–2, czerwona pusta)
+- Rozmiar kropki proporcjonalny do liczby rowerów
+- Popup po kliknięciu: nazwa stacji, numer, liczba rowerów
+- Filtry: Wszystkie / Mało (≤2) / Puste
+- Automatyczne odświeżanie co minutę
 
 ---
 
-## Konfiguracja
+## Konfiguracja automatycznego zbierania danych
 
-W pliku `collector.py` możesz zmienić:
+Dane zbierane są przez **GitHub Actions** wyzwalane przez **cron-job.org** co godzinę.
+
+### GitHub Actions (`collect.yml`)
+Workflow uruchamia `collector.py`, który pobiera dane i commituje pliki do repozytorium. Wymaga ustawienia **Read and write permissions** w Settings → Actions → General → Workflow permissions.
+
+### cron-job.org
+Zewnętrzny serwis wysyła co godzinę żądanie POST do GitHub API wyzwalające workflow:
+
+- **URL:** `https://api.github.com/repos/TWOJA-NAZWA/veturilo/actions/workflows/collect.yml/dispatches`
+- **Method:** POST
+- **Headers:**
+  - `Accept: application/vnd.github.v3+json`
+  - `Authorization: Bearer TWÓJ_GITHUB_TOKEN`
+- **Body:** `{"ref":"main"}`
+
+GitHub Personal Access Token wymaga scope: `workflow`.
+
+---
+
+## Konfiguracja kolektora
+
+W pliku `collector.py` można zmienić:
 
 ```python
-INTERVAL_SEC  = 3600   # co ile sekund pobierać (3600 = 1 godzina)
-MAX_SNAPSHOTS = 8760   # maks. historia (8760 = 365 dni × 24h)
+CITY_IDS      = [812, 461]  # Warszawa, Piaseczno
+MAX_SNAPSHOTS = 8760        # maks. historia (8760 = 365 dni × 24h)
+```
+
+Żeby dodać inne miasto, znajdź jego `uid` przez API:
+```
+https://api.nextbike.net/maps/nextbike-live.json?list_cities=1
 ```
 
 ---
@@ -129,4 +102,6 @@ MAX_SNAPSHOTS = 8760   # maks. historia (8760 = 365 dni × 24h)
 ## Wymagania
 
 - Python 3.6+
-- Brak dodatkowych bibliotek – używa tylko standardowej biblioteki
+- Brak dodatkowych bibliotek – używa tylko standardowej biblioteki Pythona
+- Konto GitHub (darmowe)
+- Konto cron-job.org (darmowe)
